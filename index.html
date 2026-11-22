@@ -40,15 +40,15 @@
         constellation: 'C0',
         buffs: {
           pruneC6: true,   // プルーネ完凸: 攻撃力実数 +350
-          nicoC2: true,    // ニコ2凸: 攻撃力実数 +300
-          nicoSig: true,   // ニコモチーフ武器: ダメージバフ +26%
-          durinSig: true   // ドゥリンモチーフ武器（黒蝕）: 攻撃力% +28%
+          nicoC2: false,    // ニコ2凸: 攻撃力実数 +300
+          nicoSig: false,   // ニコモチーフ武器: ダメージバフ +26%
+          durinSig: false   // ドゥリンモチーフ武器（黒蝕）: 攻撃力% +28%
         },
         // STEP 2：現在装備中の全体ステータス（パーティーバフなし・杯込み）
         equippedTotal: {
-          totalAtk: 2287,
-          totalCr: 78.9,
-          totalCd: 267.2
+          totalAtk: 2650,
+          totalCr: 80,
+          totalCd: 247.2
         },
         // STEP 3：現在装備中（基準）の杯ID
         equippedGobletId: 'goblet-equipped-1',
@@ -56,23 +56,23 @@
         goblets: [
           {
             id: 'goblet-equipped-1',
-            name: '今つけている炎杯',
-            type: 'pyro',
-            subCr: 7.0,
-            subCd: 21.0,
-            subAtk: 5.0
-          },
-          {
-            id: 'goblet-cand-2',
-            name: '手持ち攻撃力%杯（会心特化）',
+            name: '手持ち攻撃力%杯',
             type: 'atk',
             subCr: 10.5,
             subCd: 24.9,
             subAtk: 0
           },
           {
+            id: 'goblet-cand-2',
+            name: '手持ち炎杯',
+            type: 'pyro',
+            subCr: 7,
+            subCd: 21,
+            subAtk: 5
+          },
+          {
             id: 'goblet-cand-3',
-            name: '手持ち炎元素杯（高会心ダメ）',
+            name: '手持ち炎元素杯その2',
             type: 'pyro',
             subCr: 3.9,
             subCd: 28.0,

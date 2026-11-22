@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ファルカ杯ビルド比較チェッカー | 炎杯 vs 攻撃力%杯</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script>
+    // ==========================================
+    // 1. 基礎定数・CSV＆検証済みパラメータ
+    // ==========================================
+    const BASE_ATK = 960.844;
+    const GOBLET_MAIN_ATK_PCT = 0.466;
+    const GOBLET_MAIN_PYRO_PCT = 0.466;
+
+    // 常時オン基礎条件
+    const FIXED_ATK_PCT = 0.55;      // プルーネ魔導(30%) + 炎共鳴(25%)
+    const FIXED_FLAT_ATK = 900;      // ニコ基礎攻撃力実数バフ
+    const FIXED_DMG_BONUS = 1.45;    // 狼の武勲詩(30%) + ニコ聖遺物(40%) + プルーネ(50%) + 固有天賦(25%)
+    const IN_COMBAT_CR_BONUS = 20.0; // 風立ち4セット実戦会心率(+20%)
+    const IN_COMBAT_CD_BONUS = 30.0; // 狼の武勲詩実戦会心ダメ(+30%)
+
+    // 凸数ごとの炎 / 風ダメージ割合
+    const CONSTELLATION_RATIOS = {
+      C0: { label: '無凸 (C0)', pyro: 0.7585, anemo: 0.2415 },
+      C1: { label: '1凸 (C1)',  pyro: 0.7338, anemo: 0.2662 },
+      C2: { label: '2凸 (C2)',  pyro: 0.6442, anemo: 0.3558 }
+    };
+
+    const STORAGE_KEY = 'varka_goblet_checker_v3';
+
+    // ==========================================
+    // 2. アプリケーション状態管理
+    // ==========================================
+    function getDefaultState() {
+      return {
+        constellation: 'C0',
+        buffs: {
+          pruneC6: true,   // プルーネ完凸: 攻撃力実数 +350
+          nicoC2: true,    // ニコ2凸: 攻撃力実数 +300
+          nicoSig: true,   // ニコモチーフ武器: ダメージバフ +26%
+          durinSig: true   // ドゥリンモチーフ武器（黒蝕）: 攻撃力% +28%
+        },
+        // STEP 2：現在装備中の全体ステータス（パーティーバフなし・杯込み）
+        equippedTotal: {
+          totalAtk: 2287,
+          totalCr: 78.9,
+          totalCd: 267.2
+        },
+        // STEP 3：現在装備中（基準）の杯ID
+        equippedGobletId: 'goblet-equipped-1',
+        // STEP 3：登録済み杯リスト（subAtkは攻撃力%杯時も数値保持し計算時は0扱い）
+        goblets: [
+          {
+            id: 'goblet-equipped-1',
+            name: '今つけている炎杯',
+            type: 'pyro',
+            subCr: 7.0,
+            subCd: 21.0,
+            subAtk: 5.0
+          },
+          {
+            id: 'goblet-cand-2',
+            name: '手持ち攻撃力%杯（会心特化）',
+            type: 'atk',
+            subCr: 10.5,
+            subCd: 24.9,
+            subAtk: 0
+          },
+          {
+            id: 'goblet-cand-3',
+            name: '手持ち炎元素杯（高会心ダメ）',
+            type: 'pyro',
+            subCr: 3.9,
+            subCd: 28.0,
+            subAtk: 9.9
+          }
+        ]
+      };
+    }
+
+    let state = getDefaultState();
+
+    // ローカルストレージから復元
+    function loadState() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.equippedTotal && Array.isArray(parsed.goblets) && parsed.goblets.length > 0) {
+            state = {
+              ...getDefaultState(),
+              ...parsed,
+              buffs: {
+                ...getDefaultState().buffs,
+                ...(parsed.buffs || {})
+              },
+              equippedTotal: {
+                ...getDefaultState().equippedTotal,
+                ...(parsed.equippedTotal || {})
+              }
+            };
+            if (!state.goblets.some(g => g.id === state.equippedGobletId)) {
+              state.equippedGobletId = state.goblets[0].id;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('保存データの読み込みをスキップしました:', e);
+      }
+    }
+
+    function saveState() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {
+        console.warn('データの保存に失敗しました:', e);
+      }
+    }
+
+    // トースト通知（alert代替）
+    let toastTimer = null;
+    function showToast(msg) {
+      const el = document.getElementById('toastMessage');
+      if (!el) return;
+      el.textContent = msg;
+      el.classList.remove('opacity-0', 'translate-y-2');
+      el.classList.add('opacity-100', 'translate-y-0');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        el.classList.remove('opacity-100', 'translate-y-0');
+        el.classList.add('opacity-0', 'translate-y-2');
+      }, 2400);
+    }
+
+    // ==========================================
+    // 3. 計算ロジック（杯を差し引いた状態のステータス算出・期待値評価）
+    // ==========================================
+    function getEquippedGoblet() {
+      return state.goblets.find(g => g.id === state.equippedGobletId) || state.goblets[0];
+    }
+
+    // 「現在装備中の全体ステータス（パーティーバフなし・杯込み）」から現在装備中の杯を差し引いた状態のステータスを内部算出
+    function getStatsWithoutGoblet() {
+      const eqGoblet = getEquippedGoblet();
+      const totalAtk = Number(state.equippedTotal.totalAtk) || 0;
+      const totalCr = Number(state.equippedTotal.totalCr) || 0;
+      const totalCd = Number(state.equippedTotal.totalCd) || 0;
+
+      const eqSubCr = Number(eqGoblet.subCr) || 0;
+      const eqSubCd = Number(eqGoblet.subCd) || 0;
+      // 攻撃力%杯の場合はメインOP重複仕様のためサブOP攻撃力%は計算上0%として扱う
+      const eqSubAtkPct = eqGoblet.type === 'pyro' ? (Number(eqGoblet.subAtk) || 0) : 0;
+
+      const mainAtkContrib = eqGoblet.type === 'atk' ? BASE_ATK * GOBLET_MAIN_ATK_PCT : 0;
+      const subAtkContrib = eqGoblet.type === 'pyro' ? BASE_ATK * (eqSubAtkPct / 100) : 0;
+
+      return {
+        atk: totalAtk - (mainAtkContrib + subAtkContrib),
+        cr: totalCr - eqSubCr,
+        cd: totalCd - eqSubCd
+      };
+    }
+
+    function evaluateBuild(goblet, baseWithoutGoblet) {
+      const isEquipped = goblet.id === state.equippedGobletId;
+      const subCr = Number(goblet.subCr) || 0;
+      const subCd = Number(goblet.subCd) || 0;
+      // 攻撃力%杯の場合はサブOP攻撃力%を0%として扱う
+      const effectiveSubAtk = goblet.type === 'pyro' ? (Number(goblet.subAtk) || 0) : 0;
+
+      const mainAtkAdd = goblet.type === 'atk' ? BASE_ATK * GOBLET_MAIN_ATK_PCT : 0;
+      const subAtkAdd = goblet.type === 'pyro' ? BASE_ATK * (effectiveSubAtk / 100) : 0;
+
+      // 換装後 素のステータス（パーティーバフなし）
+      const unbuffedAtk = isEquipped
+        ? (Number(state.equippedTotal.totalAtk) || 0)
+        : baseWithoutGoblet.atk + mainAtkAdd + subAtkAdd;
+      const unbuffedCr = isEquipped
+        ? (Number(state.equippedTotal.totalCr) || 0)
+        : baseWithoutGoblet.cr + subCr;
+      const unbuffedCd = isEquipped
+        ? (Number(state.equippedTotal.totalCd) || 0)
+        : baseWithoutGoblet.cd + subCd;
+
+      // 実戦バフ後 攻撃力
+      const totalAtkPctBuff = FIXED_ATK_PCT + (state.buffs.durinSig ? 0.28 : 0);
+      const totalFlatAtkBuff = FIXED_FLAT_ATK
+        + (state.buffs.pruneC6 ? 350 : 0)
+        + (state.buffs.nicoC2 ? 300 : 0);
+
+      const finalAtk = unbuffedAtk + BASE_ATK * totalAtkPctBuff + totalFlatAtkBuff;
+
+      // 実戦バフ後 会心期待値倍率（内部計算で実戦会心率100%上限キャップ適用）
+      const rawEffCrPct = unbuffedCr + IN_COMBAT_CR_BONUS;
+      const effCr = Math.max(0, Math.min(1.0, rawEffCrPct / 100));
+      const effCdPct = unbuffedCd + IN_COMBAT_CD_BONUS;
+      const effCd = Math.max(0, effCdPct / 100);
+      const critMult = 1.0 + effCr * effCd;
+
+      // 凸数に応じた総合ダメージバフ倍率
+      const baseDmgBonus = FIXED_DMG_BONUS + (state.buffs.nicoSig ? 0.26 : 0);
+      const cRatio = CONSTELLATION_RATIOS[state.constellation] || CONSTELLATION_RATIOS.C0;
+
+      let dmgMult = 1.0 + baseDmgBonus;
+      if (goblet.type === 'pyro') {
+        const pyroMult = 1.0 + baseDmgBonus + GOBLET_MAIN_PYRO_PCT;
+        const anemoMult = 1.0 + baseDmgBonus;
+        dmgMult = cRatio.pyro * pyroMult + cRatio.anemo * anemoMult;
+      }
+
+      // 総合火力期待値指数
+      const expectedScore = finalAtk * critMult * dmgMult;
+
+      // 会心スコア（CV）
+      const cvScore = subCr * 2 + subCd;
+
+      return {
+        ...goblet,
+        isEquipped,
+        subCr,
+        subCd,
+        effectiveSubAtk,
+        cvScore,
+        unbuffedAtk,
+        unbuffedCr,
+        unbuffedCd,
+        finalAtk,
+        effCr,
+        effCdPct,
+        effCd,
+        critMult,
+        dmgMult,
+        expectedScore
+      };
+    }
+
+    // ==========================================
+    // 4. UI同期・レンダリング処理
+    // ==========================================
+    function syncControlsFromState() {
+      // 凸数ボタン
+      document.querySelectorAll('.const-btn').forEach(btn => {
+        const isActive = btn.dataset.const === state.constellation;
+        btn.className = isActive
+          ? 'const-btn active flex flex-col items-center justify-center py-2 px-3 rounded-xl border border-teal-400/70 bg-teal-500/15 text-teal-200 shadow-md shadow-teal-500/10 transition cursor-pointer'
+          : 'const-btn flex flex-col items-center justify-center py-2 px-3 rounded-xl border border-slate-700/80 bg-slate-900/80 text-slate-400 hover:border-slate-600 hover:text-slate-200 transition cursor-pointer';
+      });
+
+      // パーティーバフチェックボックス
+      const buffPruneEl = document.getElementById('buffPruneC6');
+      const buffNicoC2El = document.getElementById('buffNicoC2');
+      const buffNicoSigEl = document.getElementById('buffNicoSig');
+      const buffDurinSigEl = document.getElementById('buffDurinSig');
+
+      if (buffPruneEl) buffPruneEl.checked = Boolean(state.buffs.pruneC6);
+      if (buffNicoC2El) buffNicoC2El.checked = Boolean(state.buffs.nicoC2);
+      if (buffNicoSigEl) buffNicoSigEl.checked = Boolean(state.buffs.nicoSig);
+      if (buffDurinSigEl) buffDurinSigEl.checked = Boolean(state.buffs.durinSig);
+
+      // STEP 2：現在装備中の全体ステータス（パーティーバフなし・杯込み）
+      const atkInput = document.getElementById('baseTotalAtk');
+      const crInput = document.getElementById('baseTotalCr');
+      const cdInput = document.getElementById('baseTotalCd');
+      if (atkInput) atkInput.value = state.equippedTotal.totalAtk;
+      if (crInput) crInput.value = state.equippedTotal.totalCr;
+      if (cdInput) cdInput.value = state.equippedTotal.totalCd;
+
+      // STEP 3 新規追加フォームのサブOP 攻撃力%欄グレイアウト同期
+      const checkedNewType = document.querySelector('input[name="newGobletType"]:checked');
+      syncNewFormAtkState(checkedNewType ? checkedNewType.value : 'pyro');
+    }
+
+    // 新規杯追加フォームの「サブOP 攻撃力%」グレイアウト制御（入力値は保持）
+    function syncNewFormAtkState(type) {
+      const atkField = document.getElementById('newSubAtk');
+      const atkLabel = document.getElementById('newSubAtkLabel');
+      if (!atkField) return;
+
+      if (type === 'pyro') {
+        atkField.disabled = false;
+        atkField.title = '炎元素杯のサブOP 攻撃力%を入力';
+        atkField.className = 'w-full rounded-xl bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-teal-400 transition';
+        if (atkLabel) {
+          atkLabel.className = 'block text-[11px] font-semibold text-slate-300 mb-1 transition';
+        }
+      } else {
+        atkField.disabled = true;
+        atkField.title = '攻撃力%杯はメインOP重複のため無効（計算時は0%扱い・数値は保持）';
+        atkField.className = 'w-full rounded-xl bg-slate-900/40 border border-slate-800 px-2.5 py-1.5 text-xs font-mono font-bold text-slate-500 opacity-45 cursor-not-allowed select-none transition';
+        if (atkLabel) {
+          atkLabel.className = 'block text-[11px] font-semibold text-slate-500 mb-1 transition';
+        }
+      }
+    }
+
+    function renderManagedGobletList() {
+      const listEl = document.getElementById('managedGobletList');
+      const countEl = document.getElementById('gobletCountLabel');
+      if (!listEl) return;
+      if (countEl) countEl.textContent = state.goblets.length;
+
+      listEl.innerHTML = state.goblets.map(g => {
+        const isEquipped = g.id === state.equippedGobletId;
+        const isPyro = g.type === 'pyro';
+        const cv = ((Number(g.subCr) || 0) * 2 + (Number(g.subCd) || 0)).toFixed(1);
+
+        const cardStyle = isEquipped
+          ? 'border-orange-400/70 bg-orange-950/20 shadow-md shadow-orange-500/10'
+          : 'border-slate-800 bg-slate-950/80 hover:border-slate-700';
+
+        // クリックで「🔥 炎杯」⇔「⚔️ 攻撃力%杯」を切り替えられるトグルバッジ
+        const typeToggleBtn = isPyro
+          ? `<button type="button" onclick="toggleGobletType('${g.id}')" title="クリックで攻撃力%杯に切り替え"
+               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/45 shadow-sm transition cursor-pointer">
+               <span>🔥 炎杯</span>
+               <span class="text-[9px] opacity-75">⇄</span>
+             </button>`
+          : `<button type="button" onclick="toggleGobletType('${g.id}')" title="クリックで炎元素杯に切り替え"
+               class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/45 shadow-sm transition cursor-pointer">
+               <span>⚔️ 攻撃力%杯</span>
+               <span class="text-[9px] opacity-75">⇄</span>
+             </button>`;
+
+        const deleteBtnHtml = state.goblets.length > 1
+          ? `<button type="button" onclick="deleteGoblet('${g.id}')" class="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-900 hover:bg-rose-950 text-slate-400 hover:text-rose-300 border border-slate-700 hover:border-rose-800 transition cursor-pointer">削除</button>`
+          : `<span class="text-[10px] text-slate-500">基準1件</span>`;
+
+        // 「サブOP 攻撃力%」欄：常に表示し、攻撃力%杯のときはグレイアウト＆計算除外（入力値は保持）
+        const atkLabelClass = isPyro
+          ? 'block text-[10px] font-semibold text-slate-300 mb-0.5'
+          : 'block text-[10px] font-semibold text-slate-500 mb-0.5';
+        const atkInputClass = isPyro
+          ? 'w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5 text-xs font-mono font-semibold text-white focus:outline-none focus:border-teal-400 transition'
+          : 'w-full rounded-lg bg-slate-900/40 border border-slate-800 px-2 py-1.5 text-xs font-mono font-semibold text-slate-500 opacity-45 cursor-not-allowed select-none transition';
+        const atkTitleAttr = isPyro
+          ? 'サブOP 攻撃力%を入力'
+          : '攻撃力%杯のためメインOPと重複し無効（計算時は0%扱い・数値は保持）';
+
+        return `
+          <div class="rounded-xl border ${cardStyle} p-3 space-y-2.5 transition">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input type="radio" name="equippedGobletRadio" value="${g.id}" ${isEquipped ? 'checked' : ''}
+                  onchange="setEquippedGoblet('${g.id}')"
+                  class="w-4 h-4 accent-orange-500 cursor-pointer" />
+                <span class="text-xs font-extrabold ${isEquipped ? 'text-orange-200' : 'text-slate-300'}">
+                  ${isEquipped ? '現在装備中（基準）' : '現在装備中にする'}
+                </span>
+              </label>
+              <div class="flex items-center gap-1.5">
+                ${typeToggleBtn}
+                <span class="text-[10px] font-mono text-slate-400 px-1">CV ${cv}</span>
+                ${deleteBtnHtml}
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <input type="text" value="${escapeHtml(g.name)}"
+                onchange="updateGobletName('${g.id}', this.value)"
+                class="flex-1 rounded-lg bg-slate-900/90 border border-slate-800 px-2.5 py-1 text-xs font-bold text-white focus:outline-none focus:border-teal-400" />
+            </div>
+
+            <div class="grid grid-cols-3 gap-2">
+              <div>
+                <span class="block text-[10px] font-semibold text-slate-300 mb-0.5">サブOP 会心率%</span>
+                <input type="number" step="0.1" min="0" max="30" value="${g.subCr}"
+                  onchange="updateGobletSub('${g.id}', 'subCr', this.value)"
+                  class="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5 text-xs font-mono font-semibold text-white focus:outline-none focus:border-teal-400" />
+              </div>
+              <div>
+                <span class="block text-[10px] font-semibold text-slate-300 mb-0.5">サブOP 会心ダメージ%</span>
+                <input type="number" step="0.1" min="0" max="50" value="${g.subCd}"
+                  onchange="updateGobletSub('${g.id}', 'subCd', this.value)"
+                  class="w-full rounded-lg bg-slate-900 border border-slate-700 px-2 py-1.5 text-xs font-mono font-semibold text-white focus:outline-none focus:border-teal-400" />
+              </div>
+              <div>
+                <span class="${atkLabelClass}">サブOP 攻撃力%</span>
+                <input type="number" step="0.1" min="0" max="45" value="${g.subAtk}"
+                  ${isPyro ? '' : 'disabled'}
+                  title="${atkTitleAttr}"
+                  onchange="updateGobletSub('${g.id}', 'subAtk', this.value)"
+                  class="${atkInputClass}" />
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderAll() {
+      // アクティブバフ要約表示
+      const totalAtkPct = Math.round((FIXED_ATK_PCT + (state.buffs.durinSig ? 0.28 : 0)) * 100);
+      const totalFlatAtk = FIXED_FLAT_ATK + (state.buffs.pruneC6 ? 350 : 0) + (state.buffs.nicoC2 ? 300 : 0);
+      const totalDmgPct = Math.round((FIXED_DMG_BONUS + (state.buffs.nicoSig ? 0.26 : 0)) * 100);
+      const buffSummaryEl = document.getElementById('activeBuffSummary');
+      if (buffSummaryEl) {
+        buffSummaryEl.textContent = `合計バフ: 攻撃+${totalAtkPct}% / 実数+${totalFlatAtk} / ダメバフ+${totalDmgPct}%`;
+      }
+
+      // STEP 3 登録済み杯リスト再描画
+      renderManagedGobletList();
+
+      // 杯を差し引いた状態のステータスを内部算出
+      const baseWithoutGoblet = getStatsWithoutGoblet();
+
+      // 全登録杯の評価・期待値順ソート
+      const evaluated = state.goblets.map(g => evaluateBuild(g, baseWithoutGoblet));
+      evaluated.sort((a, b) => b.expectedScore - a.expectedScore);
+
+      const topBuild = evaluated[0];
+      const topScore = topBuild.expectedScore;
+
+      // サマリーバナー更新
+      const cInfo = CONSTELLATION_RATIOS[state.constellation] || CONSTELLATION_RATIOS.C0;
+      const summaryConstBadge = document.getElementById('summaryConstBadge');
+      const summaryTopScore = document.getElementById('summaryTopScore');
+      const summaryHeadline = document.getElementById('summaryHeadline');
+      const summarySubtext = document.getElementById('summarySubtext');
+      const bannerEl = document.getElementById('summaryBanner');
+
+      if (summaryConstBadge) {
+        summaryConstBadge.textContent = `${cInfo.label}（炎${(cInfo.pyro * 100).toFixed(1)}% / 風${(cInfo.anemo * 100).toFixed(1)}%）`;
+      }
+      if (summaryTopScore) {
+        summaryTopScore.textContent = Math.round(topScore).toLocaleString();
+      }
+
+      if (bannerEl && summaryHeadline && summarySubtext) {
+        if (evaluated.length >= 2) {
+          const secondBuild = evaluated[1];
+          const diffPct = ((topScore - secondBuild.expectedScore) / secondBuild.expectedScore) * 100;
+          const typeLabel = topBuild.type === 'pyro' ? '🔥 炎元素ダメージ杯' : '⚔️ 攻撃力%杯';
+
+          bannerEl.classList.remove('border-l-orange-500', 'border-l-teal-400');
+          bannerEl.classList.add(topBuild.type === 'pyro' ? 'border-l-orange-500' : 'border-l-teal-400');
+
+          summaryHeadline.textContent = `「${topBuild.name}」（${typeLabel}）が 1位！`;
+          summarySubtext.textContent = `2位「${secondBuild.name}」より火力期待値が +${diffPct.toFixed(2)}% 上回っています。`;
+        } else {
+          const typeLabel = topBuild.type === 'pyro' ? '🔥 炎元素ダメージ杯' : '⚔️ 攻撃力%杯';
+          summaryHeadline.textContent = `「${topBuild.name}」（${typeLabel}）を登録中`;
+          summarySubtext.textContent = `左下のフォームから比較したい別の杯を追加すると、火力差と逆転に必要なサブOP目安が表示されます。`;
+        }
+      }
+
+      // 比較ランキングカード描画
+      const container = document.getElementById('buildListContainer');
+      if (!container) return;
+
+      container.innerHTML = evaluated.map((item, idx) => {
+        const rank = idx + 1;
+        const isFirst = rank === 1;
+        const isPyro = item.type === 'pyro';
+
+        const diffFromTopPct = isFirst
+          ? 0
+          : ((item.expectedScore - topScore) / topScore) * 100;
+
+        // 伸びしろ関数モデルに基づく逆転目安（会心ダメージ+6.6%換算）
+        let reversalText = '現在の最適ビルド（1位）';
+        if (!isFirst) {
+          if (item.effCr > 0) {
+            const reqCritMult = topScore / (item.finalAtk * item.dmgMult);
+            const reqEffCd = (reqCritMult - 1.0) / item.effCr;
+            const deficitCdPct = Math.max(0, (reqEffCd - item.effCd) * 100);
+            const equivRolls = deficitCdPct / 6.6;
+            reversalText = `逆転目安：あと会心ダメ +${deficitCdPct.toFixed(1)}%（サブOP約 ${equivRolls.toFixed(1)}回分）`;
+          } else {
+            reversalText = '逆転目安：会心率不足のため算出不可';
+          }
+        }
+
+        const subOpSummary = isPyro
+          ? `サブOP 会心率 +${item.subCr.toFixed(1)}% / 会心ダメージ +${item.subCd.toFixed(1)}% / 攻撃力 +${item.effectiveSubAtk.toFixed(1)}%`
+          : `サブOP 会心率 +${item.subCr.toFixed(1)}% / 会心ダメージ +${item.subCd.toFixed(1)}%`;
+
+        const cardBorderClass = isFirst
+          ? 'border-amber-400/60 bg-gradient-to-br from-slate-900 via-slate-900 to-amber-950/20 shadow-lg shadow-amber-500/5'
+          : 'border-slate-800 bg-slate-900/75 hover:border-slate-700';
+
+        const rankBadgeHtml = isFirst
+          ? `<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-extrabold bg-amber-400/20 text-amber-300 border border-amber-400/40">👑 1位</span>`
+          : `<span class="inline-flex items-center justify-center w-8 h-7 rounded-lg text-xs font-extrabold bg-slate-800 text-slate-300 border border-slate-700">${rank}位</span>`;
+
+        const mainTypeBadgeHtml = isPyro
+          ? `<span class="px-2 py-0.5 rounded-md text-[11px] font-bold bg-orange-500/20 text-orange-300 border border-orange-500/35">🔥 炎元素ダメージ杯</span>`
+          : `<span class="px-2 py-0.5 rounded-md text-[11px] font-bold bg-teal-500/20 text-teal-300 border border-teal-500/35">⚔️ 攻撃力%杯</span>`;
+
+        const equippedBadgeHtml = item.isEquipped
+          ? `<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">現在装備中</span>`
+          : '';
+
+        return `
+          <div class="rounded-xl border ${cardBorderClass} p-4 transition-all space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2 flex-wrap">
+                ${rankBadgeHtml}
+                <span class="text-sm sm:text-base font-extrabold text-white">${escapeHtml(item.name)}</span>
+                ${mainTypeBadgeHtml}
+                ${equippedBadgeHtml}
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div class="rounded-lg bg-slate-950/80 border border-slate-800/90 p-2.5">
+                <div class="text-[10px] text-slate-400">換装後 素のステータス</div>
+                <div class="font-mono font-bold text-slate-200 mt-0.5">
+                  攻${Math.round(item.unbuffedAtk)} / ${item.unbuffedCr.toFixed(1)}% / ${item.unbuffedCd.toFixed(1)}%
+                </div>
+              </div>
+              <div class="rounded-lg bg-slate-950/80 border border-slate-800/90 p-2.5">
+                <div class="text-[10px] text-slate-400">実戦バフ後 攻撃 / 会心</div>
+                <div class="font-mono font-bold text-slate-200 mt-0.5">
+                  攻${Math.round(item.finalAtk)} / ${(item.effCr * 100).toFixed(1)}% / ${item.effCdPct.toFixed(1)}%
+                </div>
+              </div>
+              <div class="rounded-lg bg-slate-950/80 border border-slate-800/90 p-2.5">
+                <div class="text-[10px] text-slate-400">火力期待値指数</div>
+                <div class="font-mono font-extrabold ${isFirst ? 'text-amber-300' : 'text-white'} mt-0.5">
+                  ${Math.round(item.expectedScore).toLocaleString()}
+                </div>
+              </div>
+              <div class="rounded-lg bg-slate-950/80 border border-slate-800/90 p-2.5">
+                <div class="text-[10px] text-slate-400">1位との火力差</div>
+                <div class="font-mono font-extrabold ${isFirst ? 'text-emerald-400' : 'text-rose-400'} mt-0.5">
+                  ${isFirst ? 'TOP（基準）' : `${diffFromTopPct.toFixed(2)}%`}
+                </div>
+              </div>
+            </div>
+
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 pt-1 text-[11px]">
+              <div class="text-slate-400">
+                <span class="font-semibold text-slate-300">${subOpSummary}</span>
+                <span class="ml-1.5 font-mono text-slate-500">(CV ${item.cvScore.toFixed(1)})</span>
+              </div>
+              <div class="font-bold ${isFirst ? 'text-amber-300' : 'text-teal-300'}">
+                ${reversalText}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // ==========================================
+    // 5. イベントハンドラ・操作関数
+    // ==========================================
+    window.setEquippedGoblet = function(id) {
+      if (!state.goblets.some(g => g.id === id)) return;
+      state.equippedGobletId = id;
+      saveState();
+      renderAll();
+      const target = getEquippedGoblet();
+      showToast(`「${target.name}」を現在装備中（基準）に設定しました`);
+    };
+
+    // 登録済みリスト内の「🔥 炎杯」⇔「⚔️ 攻撃力%杯」ワンクリック切り替え
+    window.toggleGobletType = function(id) {
+      const target = state.goblets.find(g => g.id === id);
+      if (!target) return;
+      target.type = target.type === 'pyro' ? 'atk' : 'pyro';
+      saveState();
+      renderAll();
+      const nextLabel = target.type === 'pyro' ? '🔥 炎元素ダメージ杯' : '⚔️ 攻撃力%杯';
+      showToast(`「${target.name}」を ${nextLabel} に切り替えました`);
+    };
+
+    window.updateGobletName = function(id, newName) {
+      const target = state.goblets.find(g => g.id === id);
+      if (!target) return;
+      target.name = newName.trim() || '名称未設定の杯';
+      saveState();
+      renderAll();
+    };
+
+    window.updateGobletSub = function(id, field, val) {
+      const target = state.goblets.find(g => g.id === id);
+      if (!target) return;
+      target[field] = parseFloat(val) || 0;
+      saveState();
+      renderAll();
+    };
+
+    window.deleteGoblet = function(id) {
+      if (state.goblets.length <= 1) return;
+      state.goblets = state.goblets.filter(g => g.id !== id);
+      if (state.equippedGobletId === id) {
+        state.equippedGobletId = state.goblets[0].id;
+      }
+      saveState();
+      renderAll();
+      showToast('杯をリストから削除しました');
+    };
+
+    function bindEvents() {
+      // 凸数切り替え
+      document.querySelectorAll('.const-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.constellation = btn.dataset.const;
+          saveState();
+          syncControlsFromState();
+          renderAll();
+        });
+      });
+
+      // パーティーバフ切り替え
+      const buffMap = {
+        buffPruneC6: 'pruneC6',
+        buffNicoC2: 'nicoC2',
+        buffNicoSig: 'nicoSig',
+        buffDurinSig: 'durinSig'
+      };
+      Object.entries(buffMap).forEach(([elId, key]) => {
+        const el = document.getElementById(elId);
+        if (el) {
+          el.addEventListener('change', (e) => {
+            state.buffs[key] = e.target.checked;
+            saveState();
+            renderAll();
+          });
+        }
+      });
+
+      // STEP 2 現在装備中の全体ステータス入力
+      const totalFields = [
+        ['baseTotalAtk', 'totalAtk'],
+        ['baseTotalCr', 'totalCr'],
+        ['baseTotalCd', 'totalCd']
+      ];
+      totalFields.forEach(([elId, key]) => {
+        const el = document.getElementById(elId);
+        if (el) {
+          el.addEventListener('input', (e) => {
+            state.equippedTotal[key] = parseFloat(e.target.value) || 0;
+            saveState();
+            renderAll();
+          });
+        }
+      });
+
+      // STEP 3 新規追加フォームのメインOP切り替え（グレイアウト制御・入力値は保持）
+      document.querySelectorAll('input[name="newGobletType"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          syncNewFormAtkState(e.target.value);
+        });
+      });
+
+      // STEP 3 新規杯の追加送信
+      const addForm = document.getElementById('addGobletForm');
+      if (addForm) {
+        addForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const checkedType = document.querySelector('input[name="newGobletType"]:checked');
+          const type = checkedType ? checkedType.value : 'pyro';
+          const rawName = (document.getElementById('newGobletName')?.value || '').trim();
+          const subCr = parseFloat(document.getElementById('newSubCr')?.value) || 0;
+          const subCd = parseFloat(document.getElementById('newSubCd')?.value) || 0;
+          // 入力値はオブジェクトに保持（計算時は攻撃力%杯なら0扱い）
+          const subAtk = parseFloat(document.getElementById('newSubAtk')?.value) || 0;
+
+          const defaultName = type === 'pyro'
+            ? `炎元素杯 #${state.goblets.length + 1}`
+            : `攻撃力%杯 #${state.goblets.length + 1}`;
+
+          state.goblets.push({
+            id: 'goblet-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+            name: rawName || defaultName,
+            type,
+            subCr,
+            subCd,
+            subAtk
+          });
+
+          const nameInput = document.getElementById('newGobletName');
+          if (nameInput) nameInput.value = '';
+          saveState();
+          renderAll();
+          showToast('比較する杯リストに追加しました');
+        });
+      }
+
+      // サンプル初期化
+      const resetBtn = document.getElementById('resetSampleBtn');
+      if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+          localStorage.removeItem(STORAGE_KEY);
+          state = getDefaultState();
+          saveState();
+          syncControlsFromState();
+          renderAll();
+          showToast('初期サンプルデータに戻しました');
+        });
+      }
+    }
+
+    // 初期化実行
+    window.addEventListener('DOMContentLoaded', () => {
+      loadState();
+      syncControlsFromState();
+      bindEvents();
+      renderAll();
+    });
+  </script>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 font-['Noto_Sans_JP','Inter',sans-serif] antialiased selection:bg-teal-500/30 selection:text-teal-200">
+  <!-- ヘッダー -->
+  <header class="border-b border-slate-800/90 bg-slate-900/70 backdrop-blur sticky top-0 z-20">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span>
+          <h1 class="text-base sm:text-xl font-extrabold tracking-tight text-white">
+            ファルカ杯ビルド比較チェッカー
+          </h1>
+        </div>
+        <p class="text-[11px] sm:text-xs text-slate-400 mt-0.5">
+          現在装備中の全体ステータスから杯を差し引いた状態のステータスを基準にし、複数の炎元素杯・攻撃力%杯の期待値と逆転目安をリアルタイム比較
+        </p>
+      </div>
+      <div class="flex items-center gap-2.5 flex-wrap">
+        <span id="activeBuffSummary" class="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-slate-800/90 text-slate-300 border border-slate-700">
+          合計バフ: 読み込み中...
+        </span>
+        <button id="resetSampleBtn" type="button" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition cursor-pointer">
+          サンプル初期化
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- メインコンテンツ -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+    <!-- 左カラム：STEP 1〜3 入力エリア（5/12） -->
+    <section class="lg:col-span-5 space-y-5">
+      <!-- STEP 1：凸数・パーティーバフ設定 -->
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/75 p-4 sm:p-5 space-y-4 shadow-sm">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-extrabold text-white flex items-center gap-2">
+            <span class="inline-flex items-center justify-center w-5 h-5 rounded-md bg-teal-500/20 text-teal-300 text-xs font-mono">1</span>
+            凸数とパーティーバフ設定
+          </h2>
+          <span class="text-[10px] text-slate-400">リアルタイム反映</span>
+        </div>
+
+        <!-- 凸数選択 -->
+        <div>
+          <span class="block text-xs font-semibold text-slate-300 mb-2">ファルカ 凸数（炎 / 風ダメージ割合）</span>
+          <div class="grid grid-cols-3 gap-2">
+            <button type="button" data-const="C0" class="const-btn active flex flex-col items-center justify-center py-2 px-3 rounded-xl border border-teal-400/70 bg-teal-500/15 text-teal-200 transition cursor-pointer">
+              <span class="text-xs font-extrabold">無凸</span>
+              <span class="text-[10px] font-mono opacity-80">炎75.9% / 風24.2%</span>
+            </button>
+            <button type="button" data-const="C1" class="const-btn flex flex-col items-center justify-center py-2 px-3 rounded-xl border border-slate-700/80 bg-slate-900/80 text-slate-400 transition cursor-pointer">
+              <span class="text-xs font-extrabold">1凸</span>
+              <span class="text-[10px] font-mono opacity-80">炎73.4% / 風26.6%</span>
+            </button>
+            <button type="button" data-const="C2" class="const-btn flex flex-col items-center justify-center py-2 px-3 rounded-xl border border-slate-700/80 bg-slate-900/80 text-slate-400 transition cursor-pointer">
+              <span class="text-xs font-extrabold">2凸</span>
+              <span class="text-[10px] font-mono opacity-80">炎64.4% / 風35.6%</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- パーティーバフ オン/オフ -->
+        <div class="space-y-2 pt-1">
+          <span class="block text-xs font-semibold text-slate-300">切り替え可能なパーティーバフ</span>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <label class="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 cursor-pointer hover:border-slate-700 transition">
+              <span class="font-medium text-slate-200">プルーネ完凸</span>
+              <span class="flex items-center gap-2">
+                <span class="text-[10px] font-mono text-teal-300">攻撃+350</span>
+                <input id="buffPruneC6" type="checkbox" class="w-4 h-4 accent-teal-400 rounded cursor-pointer" />
+              </span>
+            </label>
+
+            <label class="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 cursor-pointer hover:border-slate-700 transition">
+              <span class="font-medium text-slate-200">ニコ2凸</span>
+              <span class="flex items-center gap-2">
+                <span class="text-[10px] font-mono text-teal-300">攻撃+300</span>
+                <input id="buffNicoC2" type="checkbox" class="w-4 h-4 accent-teal-400 rounded cursor-pointer" />
+              </span>
+            </label>
+
+            <label class="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 cursor-pointer hover:border-slate-700 transition">
+              <span class="font-medium text-slate-200">ニコモチーフ武器</span>
+              <span class="flex items-center gap-2">
+                <span class="text-[10px] font-mono text-orange-300">ダメ+26%</span>
+                <input id="buffNicoSig" type="checkbox" class="w-4 h-4 accent-orange-400 rounded cursor-pointer" />
+              </span>
+            </label>
+
+            <label class="flex items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 cursor-pointer hover:border-slate-700 transition">
+              <span class="font-medium text-slate-200">ドゥリンモチーフ武器（黒蝕）</span>
+              <span class="flex items-center gap-2">
+                <span class="text-[10px] font-mono text-teal-300">攻撃%+28%</span>
+                <input id="buffDurinSig" type="checkbox" class="w-4 h-4 accent-teal-400 rounded cursor-pointer" />
+              </span>
+            </label>
+          </div>
+          <p class="text-[10px] text-slate-400 leading-relaxed">
+            ※固定前提：基礎攻撃力960.84 / 風立ち4セット(率+20%) / 狼の武勲詩(ダメ+30%, 会心ダメ+30%) / 基礎味方バフ(攻撃%+55%, 実数+900, ダメ+115%)
+          </p>
+        </div>
+      </div>
+
+      <!-- STEP 2：現在装備中の全体ステータス（パーティーバフなし・杯込み） -->
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/75 p-4 sm:p-5 space-y-3.5 shadow-sm">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-extrabold text-white flex items-center gap-2">
+            <span class="inline-flex items-center justify-center w-5 h-5 rounded-md bg-orange-500/20 text-orange-300 text-xs font-mono">2</span>
+            現在装備中の全体ステータス（パーティーバフなし・杯込み）
+          </h2>
+        </div>
+        <p class="text-[11px] text-slate-400 leading-relaxed">
+          ※キャラ詳細画面に表示されている<strong>今つけている杯を含んだ現在の数値</strong>をそのまま入力してください。STEP 3で「現在装備中」に選んだ杯の分を自動計算で差し引き、他の杯に付け替えたときの火力を比較します。
+        </p>
+
+        <div class="grid grid-cols-3 gap-2.5">
+          <div>
+            <label for="baseTotalAtk" class="block text-[11px] font-semibold text-slate-300 mb-1">攻撃力（全体）</label>
+            <input id="baseTotalAtk" type="number" step="1" min="0" max="15000"
+              class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm font-mono font-bold text-white focus:outline-none focus:border-teal-400" />
+          </div>
+          <div>
+            <label for="baseTotalCr" class="block text-[11px] font-semibold text-slate-300 mb-1">会心率 %（全体）</label>
+            <input id="baseTotalCr" type="number" step="0.1" min="0" max="200"
+              class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm font-mono font-bold text-white focus:outline-none focus:border-teal-400" />
+          </div>
+          <div>
+            <label for="baseTotalCd" class="block text-[11px] font-semibold text-slate-300 mb-1">会心ダメ %（全体）</label>
+            <input id="baseTotalCd" type="number" step="0.1" min="0" max="500"
+              class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm font-mono font-bold text-white focus:outline-none focus:border-teal-400" />
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 3：比較する杯リスト＆新規杯追加 -->
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/75 p-4 sm:p-5 space-y-4 shadow-sm">
+        <div class="flex items-center justify-between flex-wrap gap-1">
+          <h2 class="text-sm font-extrabold text-white flex items-center gap-2">
+            <span class="inline-flex items-center justify-center w-5 h-5 rounded-md bg-indigo-500/20 text-indigo-300 text-xs font-mono">3</span>
+            比較する杯リスト（<span id="gobletCountLabel" class="font-mono">0</span>件）
+          </h2>
+          <span class="text-[10px] text-slate-400">バッジクリックで炎/攻撃を切替</span>
+        </div>
+
+        <!-- 登録済み杯一覧 -->
+        <div id="managedGobletList" class="space-y-2.5 max-h-[440px] overflow-y-auto pr-1"></div>
+
+        <!-- 新規杯追加フォーム -->
+        <form id="addGobletForm" class="rounded-xl border border-slate-800 bg-slate-950/75 p-3.5 space-y-3">
+          <div class="text-xs font-extrabold text-teal-300">＋ 新しい杯を追加</div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <label class="flex items-center justify-center gap-2 rounded-xl border border-orange-500/40 bg-orange-950/20 py-2 px-3 text-xs font-bold text-orange-200 cursor-pointer">
+              <input type="radio" name="newGobletType" value="pyro" checked class="accent-orange-500 cursor-pointer" />
+              <span>🔥 炎元素ダメージ杯</span>
+            </label>
+            <label class="flex items-center justify-center gap-2 rounded-xl border border-teal-500/40 bg-teal-950/20 py-2 px-3 text-xs font-bold text-teal-200 cursor-pointer">
+              <input type="radio" name="newGobletType" value="atk" class="accent-teal-400 cursor-pointer" />
+              <span>⚔️ 攻撃力%杯</span>
+            </label>
+          </div>
+
+          <div>
+            <label for="newGobletName" class="block text-[11px] font-semibold text-slate-300 mb-1">メモ名（任意）</label>
+            <input id="newGobletName" type="text" placeholder="例：炎杯②（会心率寄り）"
+              class="w-full rounded-xl bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-400" />
+          </div>
+
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label for="newSubCr" class="block text-[11px] font-semibold text-slate-300 mb-1">サブOP 会心率%</label>
+              <input id="newSubCr" type="number" step="0.1" min="0" max="30" value="6.6"
+                class="w-full rounded-xl bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-teal-400" />
+            </div>
+            <div>
+              <label for="newSubCd" class="block text-[11px] font-semibold text-slate-300 mb-1">サブOP 会心ダメージ%</label>
+              <input id="newSubCd" type="number" step="0.1" min="0" max="50" value="19.8"
+                class="w-full rounded-xl bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-teal-400" />
+            </div>
+            <div>
+              <label id="newSubAtkLabel" for="newSubAtk" class="block text-[11px] font-semibold text-slate-300 mb-1">サブOP 攻撃力%</label>
+              <input id="newSubAtk" type="number" step="0.1" min="0" max="45" value="0"
+                class="w-full rounded-xl bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-teal-400" />
+            </div>
+          </div>
+
+          <button type="submit" class="w-full py-2.5 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold text-xs sm:text-sm shadow-md shadow-teal-500/20 transition cursor-pointer">
+            比較する杯リストに追加
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 右カラム：比較ランキング結果エリア（7/12） -->
+    <section class="lg:col-span-7 space-y-5">
+      <!-- トップサマリーバナー -->
+      <div id="summaryBanner" class="rounded-2xl border border-slate-800 border-l-4 border-l-orange-500 bg-slate-900/85 p-4 sm:p-5 shadow-md">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <span id="summaryConstBadge" class="text-[11px] font-mono font-bold px-2.5 py-1 rounded-lg bg-slate-800 text-teal-300 border border-slate-700">
+            無凸 (C0) 環境
+          </span>
+          <div class="text-right">
+            <span class="text-[10px] text-slate-400 block">1位 火力期待値指数</span>
+            <span id="summaryTopScore" class="text-lg sm:text-xl font-mono font-extrabold text-amber-300">0</span>
+          </div>
+        </div>
+        <h2 id="summaryHeadline" class="text-base sm:text-xl font-extrabold text-white">
+          集計中...
+        </h2>
+        <p id="summarySubtext" class="text-xs sm:text-sm text-slate-300 mt-1">
+          -
+        </p>
+      </div>
+
+      <!-- ランキングカード一覧 -->
+      <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5 space-y-4">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <h2 class="text-sm font-extrabold text-white">
+            杯ビルド 期待値ランキング・逆転目安
+          </h2>
+          <span class="text-[11px] text-slate-400">
+            ※逆転目安は会心ダメージ+6.6%をサブOP1回分として換算
+          </span>
+        </div>
+        <div id="buildListContainer" class="space-y-3"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- トースト通知 -->
+  <div id="toastMessage"
+    class="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl bg-slate-800 text-white text-xs font-bold border border-slate-600 shadow-xl opacity-0 translate-y-2 pointer-events-none transition-all duration-200">
+  </div>
+</body>
+</html>

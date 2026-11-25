@@ -942,7 +942,7 @@
         </div>
         <div id="buildListContainer" class="space-y-3"></div>
       </div>
-    <!-- 逆転目安シミュレーション グラフ -->
+   <!-- 逆転目安シミュレーション グラフ -->
         <div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5 space-y-3">
           <div class="flex items-center justify-between flex-wrap gap-2">
             <div>
@@ -950,7 +950,7 @@
                 攻撃力%杯が炎杯を逆転するための必要会心ダメージ
               </h2>
               <p class="text-[11px] text-slate-400">
-                現在の凸数・バフ・ベース攻撃力を反映した詳細画面CD（220%〜270%）別の実戦会心ダメージ追加量
+                現在の凸数・バフ条件における詳細画面CD（220%〜270%）別の逆転ライン（基準：攻杯サブ攻0% vs 炎杯サブ攻+5.0%）
               </p>
             </div>
             <span id="chartEnvBadge" class="text-[11px] text-sky-300 bg-sky-500/10 border border-sky-500/30 px-2.5 py-0.5 rounded-full">
@@ -972,10 +972,9 @@
 (function () {
   let breakEvenChartInstance = null;
 
-  // 凸数ごとの炎元素ダメージ割合（画面表示と整合）
+  // 選択中の凸ボタンから炎ダメージ割合を取得
   function getPyroRatioByConstellation() {
     const bodyText = document.body.innerText || '';
-    // 選択中の凸ボタン（背景色や枠線、aria-pressed等）を優先判定
     const buttons = Array.from(document.querySelectorAll('button'));
     for (const btn of buttons) {
       const txt = btn.innerText || '';
@@ -998,7 +997,6 @@
     return 0.759;
   }
 
-  // 現在のバフ・ステータス・サブOP攻撃力%を取得してグラフを更新
   function syncGobletBreakEvenChart() {
     const canvas = document.getElementById('gobletBreakEvenChart');
     if (!canvas || typeof Chart === 'undefined') return;
@@ -1009,7 +1007,7 @@
     const baseDmgBonus = typeof FIXED_DMG_BONUS !== 'undefined' ? FIXED_DMG_BONUS : 1.45;
     const cdBonus = typeof IN_COMBAT_CD_BONUS !== 'undefined' ? IN_COMBAT_CD_BONUS : 30.0;
 
-    // チェックボックスから追加バフを集計（プルーネ完凸+350、ニコ2凸+300、ニコモチ+26%ダメバフ等）
+    // 選択中のパーティーバフのみ集計
     let extraAtkPct = 0;
     let extraFlatAtk = 0;
     let extraDmgBonus = 0;
@@ -1027,30 +1025,8 @@
       if (dmgMatch) extraDmgBonus += parseFloat(dmgMatch[1]) / 100;
     });
 
-    // 入力欄から現在の攻撃力（全体）を取得（なければ標準値）
-    const numberInputs = Array.from(document.querySelectorAll('input[type="number"]'));
-    let totalAtkInput = 2651;
-    for (const inp of numberInputs) {
-      const val = parseFloat(inp.value);
-      if (!isNaN(val) && val >= 1000) {
-        totalAtkInput = val;
-        break;
-      }
-    }
-
-    // 炎杯に入力されているサブOP攻撃力%を取得（なければ 5% を基準）
-    let subAtkPct = 0.05;
-    const atkSubInputs = numberInputs.filter((inp) => {
-      const v = parseFloat(inp.value);
-      return !isNaN(v) && v >= 0 && v <= 50;
-    });
-    if (atkSubInputs.length >= 3) {
-      const cand = parseFloat(atkSubInputs[2].value);
-      if (!isNaN(cand) && cand >= 0) subAtkPct = cand / 100;
-    }
-
-    // 杯なし素の攻撃力（現在装備中の攻撃力%杯 46.6% 分を差し引いた目安）
-    const noGobletAtk = Math.max(1000, totalAtkInput - baseAtk * 0.466);
+    // 環境モノサシ用の標準杯なし攻撃力（基礎960.844 + 攻撃時計46.6% + 羽311 + 標準サブOP攻撃+50%相当）
+    const standardNoGobletAtk = baseAtk * (1 + 0.466 + 0.50) + 311;
 
     const totalAtkPct = baseAtkPct + extraAtkPct;
     const totalFlatAtk = baseFlatAtk + extraFlatAtk;
@@ -1058,50 +1034,50 @@
     const pyroRatio = getPyroRatioByConstellation();
     const anemoRatio = 1 - pyroRatio;
 
-    // 攻撃力枠の伸び率（攻撃力%杯 ÷ 炎杯）
-    const atkPyro0 = noGobletAtk + baseAtk * totalAtkPct + totalFlatAtk;
-    const atkPyroSub = atkPyro0 + baseAtk * subAtkPct;
-    const atkAtkGoblet = atkPyro0 + baseAtk * 0.466;
+    // 基準比較：攻撃力%杯（サブ攻撃+0%） vs 炎元素ダメージ杯（サブ攻撃+5.0%）
+    const subAtkPct = 0.05;
+    const atkPyroSub = standardNoGobletAtk + baseAtk * totalAtkPct + totalFlatAtk + baseAtk * subAtkPct;
+    const atkAtkGoblet = standardNoGobletAtk + baseAtk * totalAtkPct + totalFlatAtk + baseAtk * 0.466;
 
-    const rAtk0 = atkAtkGoblet / atkPyro0;
     const rAtkSub = atkAtkGoblet / atkPyroSub;
-
-    // ダメバフ枠の伸び率（炎杯 ÷ 攻撃力%杯）
     const rDmg = pyroRatio * ((1 + totalDmgBonus + 0.466) / (1 + totalDmgBonus)) + anemoRatio * 1.0;
 
-    // 炎杯の総合リード率
-    const lead0 = rDmg / rAtk0;
+    // 炎杯の総合リード率（L > 1 なら炎杯優勢）
     const leadSub = rDmg / rAtkSub;
 
     const dispCds = [220, 230, 240, 250, 260, 270];
     const labels = dispCds.map((cd) => [`${cd}%`, `(実戦${cd + cdBonus}%)`]);
 
-    const dataA = dispCds.map((cd) =>
-      Number(((1 + (cd + cdBonus) / 100) * (lead0 - 1) * 100).toFixed(2))
-    );
-    const dataB = dispCds.map((cd) =>
-      Number(((1 + (cd + cdBonus) / 100) * (leadSub - 1) * 100).toFixed(2))
-    );
+    const mainLineData = dispCds.map((cd) => {
+      const raw = (1 + (cd + cdBonus) / 100) * (leadSub - 1) * 100;
+      return Number(Math.max(0, raw).toFixed(2));
+    });
+    const roll1LineData = dispCds.map(() => 6.6);
+    const roll2LineData = dispCds.map(() => 13.2);
 
-    const lead0Pct = ((lead0 - 1) * 100).toFixed(2);
     const leadSubPct = ((leadSub - 1) * 100).toFixed(2);
-    const subPctDisplay = (subAtkPct * 100).toFixed(1).replace(/\.0$/, '');
+    const isAlreadyFavoredByAtk = leadSub <= 1.0;
 
-    const labelA = `パターンA：サブOP同じ（炎杯リード ${lead0 >= 1 ? '+' : ''}${lead0Pct}%）`;
-    const labelB = `パターンB：炎杯に攻撃力+${subPctDisplay}%あり（炎杯リード ${leadSub >= 1 ? '+' : ''}${leadSubPct}%）`;
+    const mainLabel = isAlreadyFavoredByAtk
+      ? `逆転必要会心ダメ（現在：攻撃力%杯が有利・逆転不要）`
+      : `逆転に必要な実戦会心ダメ（炎杯リード +${leadSubPct}%）`;
 
     const badge = document.getElementById('chartEnvBadge');
     if (badge) {
-      badge.textContent = `炎${(pyroRatio * 100).toFixed(1)}% / 攻バフ+${Math.round(totalAtkPct * 100)}% / 実数+${totalFlatAtk} / ダメ+${Math.round(totalDmgBonus * 100)}%`;
+      if (isAlreadyFavoredByAtk) {
+        badge.textContent = `現在のバフ条件では攻撃力%杯が有利（逆転不要）`;
+      } else {
+        badge.textContent = `炎${(pyroRatio * 100).toFixed(1)}% / 攻バフ+${Math.round(totalAtkPct * 100)}% / 実数+${totalFlatAtk} / ダメ+${Math.round(totalDmgBonus * 100)}%`;
+      }
     }
 
     const ctx = canvas.getContext('2d');
     if (breakEvenChartInstance) {
       breakEvenChartInstance.data.labels = labels;
-      breakEvenChartInstance.data.datasets[0].label = labelA;
-      breakEvenChartInstance.data.datasets[0].data = dataA;
-      breakEvenChartInstance.data.datasets[1].label = labelB;
-      breakEvenChartInstance.data.datasets[1].data = dataB;
+      breakEvenChartInstance.data.datasets[0].label = mainLabel;
+      breakEvenChartInstance.data.datasets[0].data = mainLineData;
+      breakEvenChartInstance.data.datasets[1].data = roll1LineData;
+      breakEvenChartInstance.data.datasets[2].data = roll2LineData;
       breakEvenChartInstance.update();
       return;
     }
@@ -1112,26 +1088,35 @@
         labels,
         datasets: [
           {
-            label: labelA,
-            data: dataA,
-            borderColor: '#3b82f6',
+            label: mainLabel,
+            data: mainLineData,
+            borderColor: '#38bdf8',
             backgroundColor: '#0f172a',
-            borderWidth: 2.5,
+            borderWidth: 3,
             pointRadius: 5,
             pointHoverRadius: 7,
             pointBorderWidth: 2.5,
             tension: 0
           },
           {
-            label: labelB,
-            data: dataB,
-            borderColor: '#d946ef',
-            backgroundColor: '#0f172a',
-            borderWidth: 2.5,
-            pointRadius: 5,
-            pointHoverRadius: 7,
-            pointBorderWidth: 2.5,
-            tension: 0
+            label: 'サブOP 1伸び目安（+6.6%）',
+            data: roll1LineData,
+            borderColor: 'rgba(148, 163, 184, 0.55)',
+            borderWidth: 1.5,
+            borderDash: [6, 6],
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            fill: false
+          },
+          {
+            label: 'サブOP 2伸び目安（+13.2%）',
+            data: roll2LineData,
+            borderColor: 'rgba(251, 191, 36, 0.6)',
+            borderWidth: 1.5,
+            borderDash: [6, 6],
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            fill: false
           }
         ]
       },
@@ -1142,7 +1127,7 @@
         plugins: {
           legend: {
             position: 'bottom',
-            labels: { color: '#cbd5e1', usePointStyle: true, padding: 16, font: { size: 12 } }
+            labels: { color: '#cbd5e1', usePointStyle: true, padding: 14, font: { size: 11.5 } }
           },
           tooltip: {
             backgroundColor: '#0f172a',
@@ -1152,10 +1137,15 @@
             bodyColor: '#e2e8f0',
             callbacks: {
               label: (context) => {
-                const val = context.parsed.y;
-                const rolls = (val / 6.6).toFixed(2);
-                const sign = val >= 0 ? '+' : '';
-                return ` ${context.dataset.label.split('（')[0]}: ${sign}${val.toFixed(2)}%（約 ${rolls} 伸び）`;
+                if (context.datasetIndex === 0) {
+                  if (isAlreadyFavoredByAtk) {
+                    return ' 現在の条件では攻撃力%杯がすでに上回っています（逆転不要）';
+                  }
+                  const val = context.parsed.y;
+                  const rolls = (val / 6.6).toFixed(2);
+                  return ` 逆転に必要な実戦会心ダメ: +${val.toFixed(2)}%（サブOP 約 ${rolls} 伸び分）`;
+                }
+                return ` ${context.dataset.label}`;
               }
             }
           }
@@ -1167,12 +1157,12 @@
             title: { display: true, text: 'キャラ詳細画面の会心ダメージ', color: '#94a3b8', font: { size: 12 } }
           },
           y: {
-            suggestedMin: 0,
-            suggestedMax: 15,
+            min: 0,
+            suggestedMax: 16,
             grid: { color: 'rgba(148, 163, 184, 0.15)' },
             ticks: {
               color: '#94a3b8',
-              callback: (v) => `${v >= 0 ? '+' : ''}${v}%`
+              callback: (v) => `+${v}%`
             },
             title: { display: true, text: '必要会心ダメージ上昇量 (%)', color: '#94a3b8', font: { size: 12 } }
           }
@@ -1191,3 +1181,4 @@
   document.addEventListener('click', () => setTimeout(syncGobletBreakEvenChart, 60));
 })();
 </script></html>
+

@@ -434,7 +434,11 @@
 
       // 比較ランキングカード描画
       const container = document.getElementById('buildListContainer');
-      if (!container) return;
+     if (container) {
+  container.innerHTML = evaluated.map((item, idx) => {
+    // ... 中身はそのまま ...
+  }).join('');
+}
 
       container.innerHTML = evaluated.map((item, idx) => {
         const rank = idx + 1;

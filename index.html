@@ -81,13 +81,13 @@
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <label class="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 cursor-pointer hover:border-slate-700 transition">
               <span class="text-xs text-slate-200">
-                プルーネ完凸 <span class="text-[11px] font-mono text-teal-300 ml-1">攻+30%</span>
+                プルーネ完凸 <span class="text-[11px] font-mono text-teal-300 ml-1">攻撃+350</span>
               </span>
               <input id="buffPruneC6" type="checkbox" class="rounded accent-teal-400 w-4 h-4" />
             </label>
             <label class="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 cursor-pointer hover:border-slate-700 transition">
               <span class="text-xs text-slate-200">
-                ニコ2凸 <span class="text-[11px] font-mono text-teal-300 ml-1">攻+25%</span>
+                ニコ2凸 <span class="text-[11px] font-mono text-teal-300 ml-1">攻撃+300</span>
               </span>
               <input id="buffNicoC2" type="checkbox" class="rounded accent-teal-400 w-4 h-4" />
             </label>
@@ -99,7 +99,7 @@
             </label>
             <label class="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 cursor-pointer hover:border-slate-700 transition">
               <span class="text-xs text-slate-200">
-                ドゥリンモチーフ武器 <span class="text-[11px] font-mono text-teal-300 ml-1">攻+28%</span>
+                ドゥリンモチーフ武器 <span class="text-[11px] font-mono text-teal-300 ml-1">攻撃+28%</span>
               </span>
               <input id="buffDurinSig" type="checkbox" class="rounded accent-teal-400 w-4 h-4" />
             </label>
@@ -107,7 +107,7 @@
         </div>
 
         <p class="text-[11px] text-slate-400 leading-relaxed border-t border-slate-800/80 pt-3">
-          ※固定前提：基礎攻撃力 960.84 / 杯メイン 46.6% / 基礎味方バフ（攻撃+55%、ダメ+115%）※攻撃実数は加算しません。
+          ※固定前提：基礎攻撃力 960.84 / 杯メイン 46.6% / 基礎味方バフ（攻撃+55%、実数+900、ダメ+115%）※聖遺物サブ実数は加算しません。
         </p>
       </div>
 
@@ -291,6 +291,7 @@
       const GOBLET_MAIN_ATK_PCT = 0.466;
       const GOBLET_MAIN_PYRO_PCT = 0.466;
       const FIXED_ATK_BUFF = 0.55;
+      const FIXED_FLAT_ATK_BUFF = 900;
       const FIXED_DMG_BUFF = 1.15;
       const CRIT_ROLL_UNIT = 6.6;
 
@@ -363,18 +364,21 @@
       function getBuffTotals() {
         const atkPct =
           FIXED_ATK_BUFF +
-          (state.buffs.pruneC6 ? 0.30 : 0) +
-          (state.buffs.nicoC2 ? 0.25 : 0) +
           (state.buffs.durinSig ? 0.28 : 0);
+
+        const flatAtk =
+          FIXED_FLAT_ATK_BUFF +
+          (state.buffs.pruneC6 ? 350 : 0) +
+          (state.buffs.nicoC2 ? 300 : 0);
 
         const dmgPct =
           FIXED_DMG_BUFF +
           (state.buffs.nicoSig ? 0.26 : 0);
 
-        return { atkPct, dmgPct };
+        return { atkPct, flatAtk, dmgPct };
       }
 
-      // 攻撃実数を加算せず、現在装備中の杯を差し引いた基準ステータスを算出
+      // 聖遺物サブ実数は加算せず、現在装備中の杯を差し引いた基準ステータスを算出
       function getStatsWithoutGoblet() {
         const equipped = state.goblets.find((g) => g.id === state.equippedId) || state.goblets[0];
         const mainAtkRemoved = equipped && equipped.type === 'atk' ? GOBLET_MAIN_ATK_PCT : 0;
@@ -396,8 +400,11 @@
         const mainAtkPct = goblet.type === 'atk' ? GOBLET_MAIN_ATK_PCT : 0;
         const mainPyroPct = goblet.type === 'pyro' ? GOBLET_MAIN_PYRO_PCT : 0;
 
-        // 攻撃実数は加算しない
-        const finalAtk = baseStats.baseNoGobletAtk + BASE_ATK * (mainAtkPct + subAtkPct + buffs.atkPct);
+        // 聖遺物サブ実数は加算せず、チームバフの攻撃実数（buffs.flatAtk）を加算
+        const finalAtk =
+          baseStats.baseNoGobletAtk +
+          BASE_ATK * (mainAtkPct + subAtkPct + buffs.atkPct) +
+          buffs.flatAtk;
 
         const effCr = Math.min(1.0, Math.max(0, (baseStats.baseCr + subCr) / 100));
         const effCd = Math.max(0, (baseStats.baseCd + subCd) / 100);
@@ -428,10 +435,12 @@
         const cInfo = CONSTELLATION_RATIOS[state.constellation] || CONSTELLATION_RATIOS.C0;
         const buffs = getBuffTotals();
 
-        // ヘッダー合計バフ（攻撃実数なし）
+        // ヘッダー合計バフ
         const buffEl = document.getElementById('activeBuffSummary');
         if (buffEl) {
-          buffEl.textContent = `合計バフ: 攻撃+${Math.round(buffs.atkPct * 100)}% / ダメバフ+${Math.round(buffs.dmgPct * 100)}%`;
+          buffEl.textContent =
+            `合計バフ: 攻撃+${Math.round(buffs.atkPct * 100)}% / ` +
+            `実数+${buffs.flatAtk} / ダメバフ+${Math.round(buffs.dmgPct * 100)}%`;
         }
 
         // 凸ボタン状態
@@ -649,7 +658,7 @@
         renderBreakEvenChart(cInfo, buffs, baseStats);
       }
 
-      // 攻撃実数を加算しない逆転必要会心ダメグラフ（基準：攻杯サブ攻0% vs 炎杯サブ攻+5.0%）
+      // 逆転必要会心ダメグラフ（基準：攻杯サブ攻0% vs 炎杯サブ攻+5.0%、チーム攻撃実数反映・聖遺物サブ実数なし）
       function renderBreakEvenChart(cInfo, buffs, baseStats) {
         const canvas = document.getElementById('gobletBreakEvenChart');
         if (!canvas || typeof Chart === 'undefined') return;
@@ -658,24 +667,31 @@
         if (badge) {
           badge.textContent =
             `${cInfo.label} (炎${(cInfo.pyro * 100).toFixed(1)}%) / ` +
-            `攻バフ+${Math.round(buffs.atkPct * 100)}% / ダメ+${Math.round(buffs.dmgPct * 100)}% / ` +
-            `杯なしATK ${Math.round(baseStats.baseNoGobletAtk)}`;
+            `攻バフ+${Math.round(buffs.atkPct * 100)}% / 実数+${buffs.flatAtk} / ` +
+            `ダメ+${Math.round(buffs.dmgPct * 100)}% / 杯なしATK ${Math.round(baseStats.baseNoGobletAtk)}`;
         }
 
         const cdList = [220, 230, 240, 250, 260, 270];
         const labels = cdList.map((v) => `${v}%`);
         const effCr = Math.min(1.0, Math.max(0.05, (Number(state.stats.cr) || 80) / 100));
 
-        // 攻杯（サブ攻0%）vs 炎杯（サブ攻+5.0%）、攻撃実数は加算しない
-        const atkCupAtk = baseStats.baseNoGobletAtk + BASE_ATK * (GOBLET_MAIN_ATK_PCT + buffs.atkPct);
-        const pyroCupAtk = baseStats.baseNoGobletAtk + BASE_ATK * (0.05 + buffs.atkPct);
+        const atkCupAtk =
+          baseStats.baseNoGobletAtk +
+          BASE_ATK * (GOBLET_MAIN_ATK_PCT + buffs.atkPct) +
+          buffs.flatAtk;
 
-        const pyroDmgMult = 1 + buffs.dmgPct + GOBLET_MAIN_PYRO_PCT;
-        const anemoDmgMult = 1 + buffs.dmgPct;
-        const avgDmgMult = pyroDmgMult * cInfo.pyro + anemoDmgMult * cInfo.anemo;
+        const pyroCupAtk =
+          baseStats.baseNoGobletAtk +
+          BASE_ATK * (0.05 + buffs.atkPct) +
+          buffs.flatAtk;
 
-        const pyroScore = pyroCupAtk * avgDmgMult;
-        const atkBaseScore = atkCupAtk * avgDmgMult;
+        const pyroCupMult =
+          (1 + buffs.dmgPct + GOBLET_MAIN_PYRO_PCT) * cInfo.pyro +
+          (1 + buffs.dmgPct) * cInfo.anemo;
+        const atkCupMult = 1 + buffs.dmgPct;
+
+        const pyroScore = pyroCupAtk * pyroCupMult;
+        const atkBaseScore = atkCupAtk * atkCupMult;
 
         let allAhead = true;
         const curveData = cdList.map((cdPct) => {

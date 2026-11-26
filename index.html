@@ -434,7 +434,7 @@
 
       // 比較ランキングカード描画
       const container = document.getElementById('buildListContainer');
-    
+    console.log('DEBUG evaluated:', evaluated, 'topScore:', topScore, 'container:', container);
 
       if (container) {container.innerHTML = evaluated.map((item, idx) => {
         const rank = idx + 1;
@@ -986,15 +986,14 @@
   }
 
   function getCurrentBuffEnv() {
-    const text = document.body.innerText || '';
-    const atkPctMatch = text.match(/攻(?:撃)?(?:バフ)?\s*\+\s*([0-9.]+)\s*%/);
-    const flatAtkMatch = text.match(/実数\s*\+\s*([0-9.]+)/);
-    const dmgPctMatch = text.match(/ダメ\s*\+\s*([0-9.]+)\s*%/);
+    // ヘッダーの「合計バフ」表示やチェック状態から攻%/ダメ%を取得（攻撃実数は加算しない）
+    const headerText = (document.querySelector('header')?.innerText) || '';
+    const atkPctMatch = headerText.match(/攻撃\s*\+\s*([0-9.]+)\s*%/);
+    const dmgPctMatch = headerText.match(/ダメ\s*\+\s*([0-9.]+)\s*%/);
 
     return {
-      atkPct: atkPctMatch ? parseFloat(atkPctMatch[1]) / 100 : 0.83,
-      flatAtk: flatAtkMatch ? parseFloat(flatAtkMatch[1]) : 1250,
-      dmgPct: dmgPctMatch ? parseFloat(dmgPctMatch[1]) / 100 : 1.71
+      atkPct: atkPctMatch ? parseFloat(atkPctMatch[1]) / 100 : 0.55,
+      dmgPct: dmgPctMatch ? parseFloat(dmgPctMatch[1]) / 100 : 1.45
     };
   }
 
@@ -1003,11 +1002,9 @@
       document.querySelector('input[type="number"]') ||
       document.getElementById('atkInput') ||
       document.getElementById('currentAtkInput');
-    const rawCurrentAtk = atkInput ? Math.max(0, parseFloat(atkInput.value) || 0) : 2777;
+    const rawCurrentAtk = atkInput ? Math.max(0, parseFloat(atkInput.value) || 0) : 2651;
 
-    const checkedRadio =
-      document.querySelector('input[type="radio"]:checked') ||
-      Array.from(document.querySelectorAll('input[type="radio"]')).find((r) => r.checked);
+    const checkedRadio = document.querySelector('input[type="radio"]:checked');
 
     let cupType = 'atk';
     let cupSubAtkPct = 0;
@@ -1040,15 +1037,14 @@
     const anemoRatio = Math.max(0, 1 - pyroRatio);
     const baseCd = displayCdPct / 100;
 
+    // 攻撃実数は加算せず、杯なし基準ATK＋バフ%・杯差分のみで比較
     const atkCupAtk =
       noGobletBaseAtk +
-      CHART_BASE_ATK * (CHART_ATK_GOBLET_MAIN + ATK_CUP_BASE_SUB_ATK + env.atkPct) +
-      env.flatAtk;
+      CHART_BASE_ATK * (CHART_ATK_GOBLET_MAIN + ATK_CUP_BASE_SUB_ATK + env.atkPct);
 
     const pyroCupAtk =
       noGobletBaseAtk +
-      CHART_BASE_ATK * (PYRO_CUP_BASE_SUB_ATK + env.atkPct) +
-      env.flatAtk;
+      CHART_BASE_ATK * (PYRO_CUP_BASE_SUB_ATK + env.atkPct);
 
     const pyroMultWithPyroCup = 1 + env.dmgPct + CHART_PYRO_GOBLET_MAIN;
     const pyroMultWithAtkCup = 1 + env.dmgPct;
@@ -1078,7 +1074,7 @@
     if (badgeEl) {
       badgeEl.textContent =
         `炎${(pyroRatio * 100).toFixed(1)}% / 攻バフ+${Math.round(env.atkPct * 100)}% / ` +
-        `実数+${env.flatAtk} / ダメ+${Math.round(env.dmgPct * 100)}% / 杯なしATK ${Math.round(noGobletBaseAtk)}`;
+        `ダメ+${Math.round(env.dmgPct * 100)}% / 杯なしATK ${Math.round(noGobletBaseAtk)}`;
     }
 
     const cdList = [220, 230, 240, 250, 260, 270];

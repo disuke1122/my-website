@@ -954,16 +954,16 @@
   </div>
 </body>
 <script>
-const BASE_ATK = 960.844;
-  const ATK_GOBLET_MAIN = 0.466;
-  const PYRO_GOBLET_MAIN = 0.466;
+(function () {
+  const CHART_BASE_ATK = 960.844;
+  const CHART_ATK_GOBLET_MAIN = 0.466;
+  const CHART_PYRO_GOBLET_MAIN = 0.466;
   const PYRO_CUP_BASE_SUB_ATK = 0.05;
   const ATK_CUP_BASE_SUB_ATK = 0.0;
   const CRIT_DMG_ROLL_UNIT = 6.6;
 
   let breakEvenChartInstance = null;
 
-  // 選択中の凸ボタンから炎ダメージ割合を取得
   function getPyroRatioByConstellation() {
     const buttons = Array.from(document.querySelectorAll('button'));
     for (const btn of buttons) {
@@ -985,7 +985,6 @@ const BASE_ATK = 960.844;
     return 0.734;
   }
 
-  // 画面上のバッジやテキストから現在のバフ環境を抽出（取れない場合はデフォルト値）
   function getCurrentBuffEnv() {
     const text = document.body.innerText || '';
     const atkPctMatch = text.match(/攻(?:撃)?(?:バフ)?\s*\+\s*([0-9.]+)\s*%/);
@@ -999,7 +998,6 @@ const BASE_ATK = 960.844;
     };
   }
 
-  // 「現在装備中（基準）」の杯を差し引き、杯なし状態の攻撃力（A案土台）を算出
   function getNoGobletBaseAtk() {
     const atkInput =
       document.querySelector('input[type="number"]') ||
@@ -1007,12 +1005,11 @@ const BASE_ATK = 960.844;
       document.getElementById('currentAtkInput');
     const rawCurrentAtk = atkInput ? Math.max(0, parseFloat(atkInput.value) || 0) : 2777;
 
-    // 「現在装備中」のラジオボタンまたは選択中アイテムを探す
     const checkedRadio =
       document.querySelector('input[type="radio"]:checked') ||
       Array.from(document.querySelectorAll('input[type="radio"]')).find((r) => r.checked);
 
-    let cupType = 'atk'; // 'atk' | 'pyro'
+    let cupType = 'atk';
     let cupSubAtkPct = 0;
 
     if (checkedRadio) {
@@ -1027,7 +1024,6 @@ const BASE_ATK = 960.844;
           cupType = 'atk';
         }
 
-        // サブOP攻撃力%の入力欄があれば取得
         const inputs = Array.from(container.querySelectorAll('input[type="number"]'));
         if (inputs.length >= 3) {
           cupSubAtkPct = (parseFloat(inputs[2].value) || 0) / 100;
@@ -1035,29 +1031,26 @@ const BASE_ATK = 960.844;
       }
     }
 
-    const removedMainPct = cupType === 'atk' ? ATK_GOBLET_MAIN : 0;
-    const removedAtk = BASE_ATK * (removedMainPct + cupSubAtkPct);
+    const removedMainPct = cupType === 'atk' ? CHART_ATK_GOBLET_MAIN : 0;
+    const removedAtk = CHART_BASE_ATK * (removedMainPct + cupSubAtkPct);
     return Math.max(0, rawCurrentAtk - removedAtk);
   }
 
-  // 詳細画面CD(displayCdPct)における逆転必要会心ダメ上昇量(%)を計算
   function calcRequiredCritDmg(displayCdPct, noGobletBaseAtk, pyroRatio, env) {
     const anemoRatio = Math.max(0, 1 - pyroRatio);
     const baseCd = displayCdPct / 100;
 
-    // 攻撃力%杯（メイン+46.6%, サブ攻+0%）
     const atkCupAtk =
       noGobletBaseAtk +
-      BASE_ATK * (ATK_GOBLET_MAIN + ATK_CUP_BASE_SUB_ATK + env.atkPct) +
+      CHART_BASE_ATK * (CHART_ATK_GOBLET_MAIN + ATK_CUP_BASE_SUB_ATK + env.atkPct) +
       env.flatAtk;
 
-    // 炎杯（メイン炎ダメ+46.6%, サブ攻+5.0%）
     const pyroCupAtk =
       noGobletBaseAtk +
-      BASE_ATK * (PYRO_CUP_BASE_SUB_ATK + env.atkPct) +
+      CHART_BASE_ATK * (PYRO_CUP_BASE_SUB_ATK + env.atkPct) +
       env.flatAtk;
 
-    const pyroMultWithPyroCup = 1 + env.dmgPct + PYRO_GOBLET_MAIN;
+    const pyroMultWithPyroCup = 1 + env.dmgPct + CHART_PYRO_GOBLET_MAIN;
     const pyroMultWithAtkCup = 1 + env.dmgPct;
     const anemoMult = 1 + env.dmgPct;
 
@@ -1162,7 +1155,6 @@ const BASE_ATK = 960.844;
             callbacks: {
               title: (items) => (items.length ? `詳細画面CD ${items[0].label}` : ''),
               label: (context) => {
-                // ホバー時はメインラインのみ表示（1伸び/2伸び点線の項目は非表示）
                 if (context.datasetIndex !== 0) return null;
                 if (allAhead) {
                   return ' 現在の条件では攻撃力%杯がすでに上回っています';
@@ -1200,5 +1192,6 @@ const BASE_ATK = 960.844;
   document.addEventListener('click', () => setTimeout(renderBreakEvenChart, 30));
   document.addEventListener('change', () => setTimeout(renderBreakEvenChart, 30));
   document.addEventListener('input', () => setTimeout(renderBreakEvenChart, 50));
+})();
 </script></html>
 

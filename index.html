@@ -670,12 +670,13 @@
         const atkCupAtk = baseStats.baseNoGobletAtk + BASE_ATK * (GOBLET_MAIN_ATK_PCT + buffs.atkPct);
         const pyroCupAtk = baseStats.baseNoGobletAtk + BASE_ATK * (0.05 + buffs.atkPct);
 
-        const pyroDmgMult = 1 + buffs.dmgPct + GOBLET_MAIN_PYRO_PCT;
-        const anemoDmgMult = 1 + buffs.dmgPct;
-        const avgDmgMult = pyroDmgMult * cInfo.pyro + anemoDmgMult * cInfo.anemo;
+       const pyroCupMult =
+  (1 + buffs.dmgPct + GOBLET_MAIN_PYRO_PCT) * cInfo.pyro +
+  (1 + buffs.dmgPct) * cInfo.anemo;
+const atkCupMult = 1 + buffs.dmgPct;
 
-        const pyroScore = pyroCupAtk * avgDmgMult;
-        const atkBaseScore = atkCupAtk * avgDmgMult;
+const pyroScore = pyroCupAtk * pyroCupMult;
+const atkBaseScore = atkCupAtk * atkCupMult;
 
         let allAhead = true;
         const curveData = cdList.map((cdPct) => {
